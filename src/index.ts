@@ -2,20 +2,29 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { TrelloClient } from './trello-client.js';
 import { TrelloHealthEndpoints, HealthEndpointSchemas } from './health/health-endpoints.js';
 import { formatCardListResponse } from './card-list-preview.js';
+import {
+  getEnabledToolNames,
+  parseBooleanEnv,
+  parseToolProfile,
+  type ToolProfile,
+} from './tool-profile.js';
 
 class TrelloServer {
   private server: McpServer;
   private trelloClient: TrelloClient;
   private healthEndpoints: TrelloHealthEndpoints;
+  private enabledToolNames: Set<string>;
 
   constructor() {
     const apiKey = process.env.TRELLO_API_KEY;
     const token = process.env.TRELLO_TOKEN;
     const defaultBoardId = process.env.TRELLO_BOARD_ID;
     const allowedWorkspacesEnv = process.env.TRELLO_ALLOWED_WORKSPACES;
+    const allowedBoardsEnv = process.env.TRELLO_ALLOWED_BOARDS;
 
     if (!apiKey || !token) {
       throw new Error('TRELLO_API_KEY and TRELLO_TOKEN environment variables are required');
@@ -25,6 +34,15 @@ class TrelloServer {
     const allowedWorkspaceIds = allowedWorkspacesEnv
       ? allowedWorkspacesEnv.split(',').map(id => id.trim()).filter(id => id.length > 0)
       : undefined;
+    const allowedBoardIds = allowedBoardsEnv
+      ? allowedBoardsEnv.split(',').map(id => id.trim()).filter(id => id.length > 0)
+      : undefined;
+
+    const toolProfile: ToolProfile = parseToolProfile(process.env.TRELLO_MCP_TOOL_PROFILE);
+    this.enabledToolNames = getEnabledToolNames(
+      toolProfile,
+      parseBooleanEnv(process.env.TRELLO_MCP_ENABLE_RESTRICTED_TOOLS)
+    );
 
     this.trelloClient = new TrelloClient({
       apiKey,
@@ -32,6 +50,7 @@ class TrelloServer {
       defaultBoardId,
       boardId: defaultBoardId,
       allowedWorkspaceIds,
+      allowedBoardIds,
     });
 
     this.healthEndpoints = new TrelloHealthEndpoints(this.trelloClient);
@@ -41,6 +60,7 @@ class TrelloServer {
       version: '1.7.1',
     });
 
+    this.applyToolProfile();
     this.setupTools();
     this.setupHealthEndpoints();
 
@@ -61,6 +81,16 @@ class TrelloServer {
       ],
       isError: true,
     };
+  }
+
+  private applyToolProfile() {
+    const registerTool = this.server.registerTool.bind(this.server);
+    this.server.registerTool = ((name: string, config: unknown, callback: unknown) => {
+      if (!this.enabledToolNames.has(name)) {
+        return undefined;
+      }
+      return registerTool(name, config as never, callback as never);
+    }) as typeof this.server.registerTool;
   }
 
   private setupTools() {

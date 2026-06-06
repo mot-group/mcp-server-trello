@@ -46,6 +46,7 @@ function createClient(overrides?: {
   boardId?: string;
   defaultBoardId?: string;
   allowedWorkspaceIds?: string[];
+  allowedBoardIds?: string[];
 }) {
   return new TrelloClient({
     apiKey: 'test-key',
@@ -53,6 +54,7 @@ function createClient(overrides?: {
     boardId: overrides?.boardId,
     defaultBoardId: overrides?.defaultBoardId,
     allowedWorkspaceIds: overrides?.allowedWorkspaceIds,
+    allowedBoardIds: overrides?.allowedBoardIds,
   });
 }
 
@@ -75,6 +77,17 @@ describe('TrelloClient', () => {
     it('should not enable workspace restrictions when allowed workspaces are unset or empty', () => {
       expect(createClient().hasWorkspaceRestriction).toBe(false);
       expect(createClient({ allowedWorkspaceIds: [] }).hasWorkspaceRestriction).toBe(false);
+    });
+
+    it('should not enable board restrictions when allowed boards are unset or empty', () => {
+      expect(createClient().hasBoardRestriction).toBe(false);
+      expect(createClient({ allowedBoardIds: [] }).hasBoardRestriction).toBe(false);
+    });
+
+    it('should reject a configured active board outside the board allowlist', () => {
+      expect(() =>
+        createClient({ boardId: 'blocked-board', allowedBoardIds: ['allowed-board'] })
+      ).toThrow("Access to board 'blocked-board' is not allowed");
     });
   });
 
@@ -100,6 +113,23 @@ describe('TrelloClient', () => {
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/members/me/boards');
       expect(result).toEqual(boards);
     });
+
+    it('should filter boards by allowed workspaces and allowed boards', async () => {
+      const boards = [
+        { id: 'allowed-board', idOrganization: 'allowed-workspace', name: 'Allowed' },
+        { id: 'blocked-board', idOrganization: 'allowed-workspace', name: 'Blocked Board' },
+        { id: 'other-workspace-board', idOrganization: 'blocked-workspace', name: 'Blocked Workspace' },
+      ];
+      mockAxiosInstance.get.mockResolvedValue({ data: boards });
+
+      const client = createClient({
+        allowedWorkspaceIds: ['allowed-workspace'],
+        allowedBoardIds: ['allowed-board'],
+      });
+      const result = await client.listBoards();
+
+      expect(result).toEqual([boards[0]]);
+    });
   });
 
   describe('getBoardById', () => {
@@ -113,6 +143,15 @@ describe('TrelloClient', () => {
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/boards/b1');
       expect(result).toEqual(board);
     });
+
+    it('should reject a blocked board before making a request', async () => {
+      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+
+      await expect(client.getBoardById('blocked-board')).rejects.toThrow(
+        "Access to board 'blocked-board' is not allowed"
+      );
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
   });
 
   describe('getLists', () => {
@@ -125,6 +164,15 @@ describe('TrelloClient', () => {
 
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/boards/board123/lists');
       expect(result).toEqual(lists);
+    });
+
+    it('should reject a blocked board before listing lists', async () => {
+      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+
+      await expect(client.getLists('blocked-board')).rejects.toThrow(
+        "Access to board 'blocked-board' is not allowed"
+      );
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
     });
 
     it('should fall back to active board', async () => {
@@ -187,6 +235,17 @@ describe('TrelloClient', () => {
         start: undefined,
         idLabels: undefined,
       });
+    });
+
+    it('should reject card creation when the target list is on a blocked board', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { idBoard: 'blocked-board' } });
+
+      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+
+      await expect(
+        client.addCard(undefined, { listId: 'list-on-blocked-board', name: 'Card' })
+      ).rejects.toThrow("Access to board 'blocked-board' is not allowed");
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
   });
 
@@ -331,6 +390,23 @@ describe('TrelloClient', () => {
       await client.getMyCards();
 
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/members/me/cards');
+    });
+
+    it('should filter current user cards by allowed boards when restricted', async () => {
+      const cards = [
+        { id: 'c1', idBoard: 'allowed-board', name: 'Allowed' },
+        { id: 'c2', idBoard: 'blocked-board', name: 'Blocked' },
+        { id: 'c3', name: 'Unknown Board' },
+      ];
+      mockAxiosInstance.get.mockResolvedValue({ data: cards });
+
+      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+      const result = await client.getMyCards();
+
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/members/me/cards', {
+        params: { fields: 'all' },
+      });
+      expect(result).toEqual([cards[0]]);
     });
   });
 

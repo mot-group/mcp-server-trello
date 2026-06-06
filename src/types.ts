@@ -6,6 +6,8 @@ export interface TrelloConfig {
   workspaceId?: string;
   /** Optional list of workspace IDs to restrict access to. If set, only these workspaces can be accessed. */
   allowedWorkspaceIds?: string[];
+  /** Optional list of board IDs to restrict access to. If set, only these boards can be accessed. */
+  allowedBoardIds?: string[];
 }
 
 export interface TrelloBoard {
@@ -32,6 +34,7 @@ export interface TrelloCard {
   name: string;
   desc: string;
   due: string | null;
+  idBoard?: string;
   idList: string;
   idLabels: string[];
   closed: boolean;
