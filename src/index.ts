@@ -404,6 +404,13 @@ class TrelloServer {
             .optional()
             .describe('ID of the Trello board (uses default if not provided)'),
           listId: z.string().describe('ID of the list to archive'),
+          confirmDestructiveAction: z
+            .literal(true)
+            .describe('Required. Must be true to confirm archiving this list.'),
+          destructiveActionReason: z
+            .string()
+            .min(1)
+            .describe('Brief reason confirming why archiving this list is intended.'),
         },
       },
       async ({ boardId, listId }) => {
@@ -434,10 +441,38 @@ class TrelloServer {
             .optional()
             .describe('Whether the authenticated user is subscribed to the list'),
           idBoard: z.string().optional().describe('ID of a board to move the list to'),
+          confirmDestructiveAction: z
+            .boolean()
+            .optional()
+            .describe('Required and must be true when setting closed=true to archive a list.'),
+          destructiveActionReason: z
+            .string()
+            .optional()
+            .describe('Required when setting closed=true; explains why archiving is intended.'),
         },
       },
-      async ({ listId, name, closed, subscribed, idBoard }) => {
+      async ({
+        listId,
+        name,
+        closed,
+        subscribed,
+        idBoard,
+        confirmDestructiveAction,
+        destructiveActionReason,
+      }) => {
         try {
+          if (closed === true && confirmDestructiveAction !== true) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              'confirmDestructiveAction=true is required when update_list archives a list with closed=true'
+            );
+          }
+          if (closed === true && !destructiveActionReason?.trim()) {
+            throw new McpError(
+              ErrorCode.InvalidParams,
+              'destructiveActionReason is required when update_list archives a list with closed=true'
+            );
+          }
           const params: {
             name?: string;
             closed?: boolean;
@@ -1581,6 +1616,13 @@ class TrelloServer {
               })
             )
             .describe('Array of cards to create (max 50)'),
+          confirmBulkAction: z
+            .literal(true)
+            .describe('Required. Must be true to confirm creating multiple cards.'),
+          bulkActionReason: z
+            .string()
+            .min(1)
+            .describe('Brief reason confirming why this bulk card creation is intended.'),
         },
       },
       async ({ listId, cards }) => {

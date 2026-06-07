@@ -21,7 +21,14 @@ describe('tool profile', () => {
     const tools = getEnabledToolNames('collaboration', false);
 
     expect(tools.has('get_card')).toBe(true);
+    expect(tools.has('get_lists')).toBe(true);
+    expect(tools.has('get_cards_by_list_id')).toBe(true);
     expect(tools.has('add_list_to_board')).toBe(true);
+    expect(tools.has('update_list')).toBe(true);
+    expect(tools.has('update_list_position')).toBe(true);
+    expect(tools.has('archive_list')).toBe(true);
+    expect(tools.has('add_card_to_list')).toBe(true);
+    expect(tools.has('add_cards_to_list')).toBe(true);
     expect(tools.has('add_comment')).toBe(true);
     expect(tools.has('move_card')).toBe(true);
     expect(tools.has('attach_image_to_card')).toBe(true);
@@ -30,6 +37,7 @@ describe('tool profile', () => {
     expect(tools.has('attach_image_data_to_card')).toBe(true);
     expect(tools.has('download_attachment')).toBe(true);
     expect(tools.has('archive_card')).toBe(false);
+    expect(tools.has('delete_label')).toBe(false);
     expect(tools.has('perform_system_repair')).toBe(false);
   });
 

@@ -22,7 +22,11 @@ export const COLLABORATION_TOOLS = new Set([
   'set_active_board',
   'set_active_workspace',
   'add_list_to_board',
+  'update_list',
+  'update_list_position',
+  'archive_list',
   'add_card_to_list',
+  'add_cards_to_list',
   'update_card_details',
   'move_card',
   'add_comment',
@@ -40,20 +44,16 @@ export const COLLABORATION_TOOLS = new Set([
 
 export const SETUP_ADMIN_TOOLS = new Set([
   'create_board',
-  'update_list',
-  'update_list_position',
   'update_label',
 ]);
 
 export const RESTRICTED_TOOLS = new Set([
   'archive_card',
-  'archive_list',
   'delete_comment',
   'delete_checklist_item',
   'delete_label',
   'copy_card',
   'copy_checklist',
-  'add_cards_to_list',
   'get_board_custom_fields',
   'update_card_custom_field',
   'assign_member_to_card',
