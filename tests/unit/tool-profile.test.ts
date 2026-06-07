@@ -21,7 +21,9 @@ describe('tool profile', () => {
     const tools = getEnabledToolNames('collaboration', false);
 
     expect(tools.has('get_card')).toBe(true);
+    expect(tools.has('add_list_to_board')).toBe(true);
     expect(tools.has('add_comment')).toBe(true);
+    expect(tools.has('move_card')).toBe(true);
     expect(tools.has('attach_image_to_card')).toBe(true);
     expect(tools.has('attach_file_to_card')).toBe(true);
     expect(tools.has('attach_data_to_card')).toBe(true);

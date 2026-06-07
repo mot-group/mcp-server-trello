@@ -21,6 +21,7 @@ export const COLLABORATION_TOOLS = new Set([
   'get_health',
   'set_active_board',
   'set_active_workspace',
+  'add_list_to_board',
   'add_card_to_list',
   'update_card_details',
   'move_card',
@@ -39,7 +40,6 @@ export const COLLABORATION_TOOLS = new Set([
 
 export const SETUP_ADMIN_TOOLS = new Set([
   'create_board',
-  'add_list_to_board',
   'update_list',
   'update_list_position',
   'update_label',
