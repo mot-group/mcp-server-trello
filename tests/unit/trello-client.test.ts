@@ -251,6 +251,28 @@ describe('TrelloClient', () => {
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
 
+    it('should reject fetching a blocked workspace by ID', async () => {
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.getWorkspaceById('blocked-workspace')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it('should not readopt a saved active workspace that is now blocked', async () => {
+      const fs = await import('fs/promises');
+      vi.mocked(fs.readFile).mockResolvedValueOnce(
+        JSON.stringify({ workspaceId: 'blocked-workspace' }) as never
+      );
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.loadConfig()).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(client.activeWorkspaceId).toBeUndefined();
+    });
+
     it('should cache board-to-workspace lookups across checks', async () => {
       mockAxiosInstance.get.mockImplementation(async (url: string) => {
         if (url === '/boards/board-elsewhere') return { data: { idOrganization: 'other-workspace' } };

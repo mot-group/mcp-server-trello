@@ -88,12 +88,15 @@ export class TrelloClient {
       const data = await fs.readFile(CONFIG_FILE, 'utf8');
       const savedConfig = JSON.parse(data);
 
-      // Only update boardId and workspaceId, keep credentials from env
+      // Only update boardId and workspaceId, keep credentials from env. Saved state
+      // must pass the blocklists like any other input: a board/workspace that was
+      // active before being blocked must not be readopted from disk.
       if (savedConfig.boardId) {
         this.validateBoardAccess(savedConfig.boardId);
         this.activeConfig.boardId = savedConfig.boardId;
       }
       if (savedConfig.workspaceId) {
+        this.validateWorkspaceAccess(savedConfig.workspaceId);
         this.activeConfig.workspaceId = savedConfig.workspaceId;
       }
     } catch (error) {
@@ -467,6 +470,7 @@ export class TrelloClient {
    * Get a specific workspace by ID
    */
   async getWorkspaceById(workspaceId: string): Promise<TrelloWorkspace> {
+    this.validateWorkspaceAccess(workspaceId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get(`/organizations/${workspaceId}`);
       return response.data;
