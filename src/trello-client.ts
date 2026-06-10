@@ -319,6 +319,29 @@ export class TrelloClient {
     await this.validateBoardScopedAccess(boardId);
   }
 
+  private async getBoardIdForChecklist(checklistId: string): Promise<string | undefined> {
+    return this.handleRequest(async () => {
+      const response = await this.axiosInstance.get(`/checklists/${checklistId}`, {
+        params: { fields: 'idBoard' },
+      });
+      return response.data.idBoard || '';
+    });
+  }
+
+  private async validateChecklistAccess(checklistId: string): Promise<void> {
+    if (!this.hasBoardRestriction && !this.hasWorkspaceRestriction) {
+      return;
+    }
+    const boardId = await this.getBoardIdForChecklist(checklistId);
+    if (!boardId) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Unable to determine board for checklist '${checklistId}'`
+      );
+    }
+    await this.validateBoardScopedAccess(boardId);
+  }
+
   /**
    * Validate workspace access, throwing an error if the workspace is blocked
    */
@@ -398,9 +421,12 @@ export class TrelloClient {
       const response = await this.axiosInstance.get('/members/me/boards');
       let boards: TrelloBoard[] = response.data;
 
-      // Filter by allowed workspaces if restriction is enabled
+      // Drop boards in blocked workspaces. Boards with no workspace (personal boards)
+      // are kept: under the open-by-default blocklist model they are not blocked.
       if (this.hasWorkspaceRestriction) {
-        boards = boards.filter(board => board.idOrganization && this.isWorkspaceAllowed(board.idOrganization));
+        boards = boards.filter(
+          board => !board.idOrganization || this.isWorkspaceAllowed(board.idOrganization)
+        );
       }
       if (this.hasBoardRestriction) {
         boards = boards.filter(board => this.isBoardAllowed(board.id));
@@ -467,7 +493,9 @@ export class TrelloClient {
 
   /**
    * Create a new board
-   * Validates the target workspace against the blocklist if one is specified.
+   * Validates the target workspace against the blocklist; when a workspace blocklist is
+   * active, an explicit workspace is required (an unscoped creation would be resolved to
+   * a default workspace by Trello with no local validation).
    * Board blocklists do not prevent creation: a brand-new board cannot be on the blocklist.
    */
   async createBoard(params: {
@@ -480,9 +508,16 @@ export class TrelloClient {
     // Determine the target workspace
     const targetWorkspace = params.idOrganization ?? this.activeConfig.workspaceId;
 
-    // Refuse to create boards inside a blocked workspace
+    // Refuse to create boards inside a blocked workspace. With a workspace blocklist
+    // active, also refuse an unscoped creation: Trello would resolve it to a default
+    // workspace server-side, with no local validation against the blocklist.
     if (targetWorkspace) {
       this.validateWorkspaceAccess(targetWorkspace);
+    } else if (this.hasWorkspaceRestriction) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'TRELLO_BLOCKED_WORKSPACES is set, so board creation requires an explicit workspace: provide idOrganization or set an active workspace.'
+      );
     }
 
     return this.handleRequest(async () => {
@@ -1373,6 +1408,9 @@ export class TrelloClient {
     pos?: string;
   }): Promise<TrelloChecklist> {
     await this.validateCardAccess(params.cardId);
+    // The source must pass the same blocklists as the destination: otherwise checklist
+    // contents could be exfiltrated from a blocked board into an allowed card.
+    await this.validateChecklistAccess(params.sourceChecklistId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.post('/checklists', {
         idCard: params.cardId,

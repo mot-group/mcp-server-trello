@@ -212,6 +212,45 @@ describe('TrelloClient', () => {
       expect(mockAxiosInstance.put).not.toHaveBeenCalled();
     });
 
+    it('should keep personal boards (no workspace) when a workspace blocklist is set', async () => {
+      const boards = [
+        { id: 'personal-board', idOrganization: null, name: 'Personal' },
+        { id: 'ws-board', idOrganization: 'other-workspace', name: 'In workspace' },
+        { id: 'blocked-ws-board', idOrganization: 'blocked-workspace', name: 'Blocked' },
+      ];
+      mockAxiosInstance.get.mockResolvedValue({ data: boards });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      const result = await client.listBoards();
+      expect(result).toEqual([boards[0], boards[1]]);
+    });
+
+    it('should reject copying a checklist from a board in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/cards/c1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/checklists/cl-blocked') return { data: { idBoard: 'board-in-blocked-ws' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(
+        client.copyChecklist({ sourceChecklistId: 'cl-blocked', cardId: 'c1' })
+      ).rejects.toThrow("Access to workspace 'blocked-workspace' is blocked");
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it('should require an explicit workspace for board creation when a workspace blocklist is set', async () => {
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.createBoard({ name: 'New' })).rejects.toThrow(
+        'board creation requires an explicit workspace'
+      );
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
     it('should cache board-to-workspace lookups across checks', async () => {
       mockAxiosInstance.get.mockImplementation(async (url: string) => {
         if (url === '/boards/board-elsewhere') return { data: { idOrganization: 'other-workspace' } };
