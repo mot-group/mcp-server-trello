@@ -50,20 +50,21 @@ the agent runs the bundled installer:
 bash skill/scripts/install.sh
 ```
 
-The installer builds the MCP server from `skill/assets/source/` when Bun is
-available. If Bun is unavailable, it falls back to the published Smithery
-install path for `@delorenj/mcp-server-trello` and creates the same local
-`build/index.js` command path used by the skill activation check.
+The installer builds the MCP server from this repository's root `src/` (the
+single source of truth) when Bun is available. If Bun is unavailable, it falls
+back to the published Smithery install path for `@delorenj/mcp-server-trello`
+and creates the same local `build/index.js` command path used by the skill
+activation check.
 
 ## Skill package structure
 
 The skill is the agent-facing entry point for this repository.
 
 - `skill/SKILL.md`: Activation, routing, and agent workflow rules.
-- `skill/scripts/install.sh`: First-run installer for the bundled server.
+- `skill/scripts/install.sh`: First-run installer; builds from the repository's
+  root `src/`.
 - `skill/references/trello-mcp/`: Focused references for setup, tools,
   workflows, and gotchas.
-- `skill/assets/source/`: Bundled MCP server source used for local builds.
 
 For AI agents, start with `skill/SKILL.md` rather than this README. The README
 is the human-facing overview; the skill references are the operational surface

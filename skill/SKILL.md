@@ -1,13 +1,13 @@
 ---
 name: mcp-server-trello
-description: Trello MCP Server skill for board discovery, card workflows, checklist management, comments, attachments, labels, members, board/workspace selection, and health monitoring through the bundled @delorenj/mcp-server-trello server.
+description: Trello MCP Server skill for board discovery, card workflows, checklist management, comments, attachments, labels, members, board/workspace selection, and health monitoring through the @delorenj/mcp-server-trello server built from this repository.
 ---
 
 # Trello MCP Server Skill
 
 Use this skill when an agent needs to inspect or manage Trello boards through
-the bundled MCP server. The skill carries its own server source in
-`assets/source/` and installs it locally on first use.
+the MCP server. The install script builds the server from this repository's
+root source (the single source of truth) and installs it locally on first use.
 
 ## Activation
 
@@ -19,10 +19,14 @@ Before using Trello tools, verify that the local server has been installed.
    `bash {skill-root}/scripts/install.sh`
 3. Confirm the MCP client has `TRELLO_API_KEY` and `TRELLO_TOKEN` configured.
    Optional values are `TRELLO_BOARD_ID`, `TRELLO_WORKSPACE_ID`,
-   `https_proxy`, and `HTTPS_PROXY`.
+   `TRELLO_BLOCKED_WORKSPACES`, `TRELLO_BLOCKED_BOARDS`,
+   `https_proxy`, and `HTTPS_PROXY`. Access is open by default; the blocklist
+   variables deny specific IDs. The legacy `TRELLO_ALLOWED_*` variables are no
+   longer supported and fail fast at startup.
 
-The install script builds from `assets/source/` when Bun is available. If Bun is
-not available, it falls back to the published package install path and creates a
+The install script builds from the repository root source when Bun is available.
+If Bun is not available (or the skill directory is used standalone, outside the
+repository), it falls back to the published package install path and creates a
 local wrapper at the same `build/index.js` check path.
 
 ## Reading Order
