@@ -23,19 +23,30 @@ class TrelloServer {
     const apiKey = process.env.TRELLO_API_KEY;
     const token = process.env.TRELLO_TOKEN;
     const defaultBoardId = process.env.TRELLO_BOARD_ID;
-    const allowedWorkspacesEnv = process.env.TRELLO_ALLOWED_WORKSPACES;
-    const allowedBoardsEnv = process.env.TRELLO_ALLOWED_BOARDS;
+    const blockedWorkspacesEnv = process.env.TRELLO_BLOCKED_WORKSPACES;
+    const blockedBoardsEnv = process.env.TRELLO_BLOCKED_BOARDS;
 
     if (!apiKey || !token) {
       throw new Error('TRELLO_API_KEY and TRELLO_TOKEN environment variables are required');
     }
 
-    // Parse allowed workspaces from comma-separated string
-    const allowedWorkspaceIds = allowedWorkspacesEnv
-      ? allowedWorkspacesEnv.split(',').map(id => id.trim()).filter(id => id.length > 0)
+    // The allowlist model was replaced by a blocklist (open by default). Fail fast on the
+    // legacy variables instead of silently ignoring them: a config that believed it was
+    // restricted to specific boards must not silently become all-boards-open.
+    if (process.env.TRELLO_ALLOWED_WORKSPACES || process.env.TRELLO_ALLOWED_BOARDS) {
+      throw new Error(
+        'TRELLO_ALLOWED_WORKSPACES / TRELLO_ALLOWED_BOARDS are no longer supported. ' +
+          'Access is open by default; use TRELLO_BLOCKED_WORKSPACES / TRELLO_BLOCKED_BOARDS ' +
+          'to deny specific IDs, and remove the legacy variables from the MCP config.'
+      );
+    }
+
+    // Parse blocklists from comma-separated strings
+    const blockedWorkspaceIds = blockedWorkspacesEnv
+      ? blockedWorkspacesEnv.split(',').map(id => id.trim()).filter(id => id.length > 0)
       : undefined;
-    const allowedBoardIds = allowedBoardsEnv
-      ? allowedBoardsEnv.split(',').map(id => id.trim()).filter(id => id.length > 0)
+    const blockedBoardIds = blockedBoardsEnv
+      ? blockedBoardsEnv.split(',').map(id => id.trim()).filter(id => id.length > 0)
       : undefined;
 
     const toolProfile: ToolProfile = parseToolProfile(process.env.TRELLO_MCP_TOOL_PROFILE);
@@ -49,8 +60,8 @@ class TrelloServer {
       token,
       defaultBoardId,
       boardId: defaultBoardId,
-      allowedWorkspaceIds,
-      allowedBoardIds,
+      blockedWorkspaceIds,
+      blockedBoardIds,
     });
 
     this.healthEndpoints = new TrelloHealthEndpoints(this.trelloClient);
@@ -802,7 +813,7 @@ class TrelloServer {
       {
         title: 'List Workspaces',
         description:
-          'List workspaces the user has access to. If TRELLO_ALLOWED_WORKSPACES is configured, only allowed workspaces are returned.',
+          'List workspaces the user has access to. Workspaces listed in TRELLO_BLOCKED_WORKSPACES are excluded.',
         inputSchema: {},
       },
       async () => {

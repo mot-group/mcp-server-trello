@@ -136,47 +136,47 @@ export class TrelloClient {
   }
 
   /**
-   * Check if workspace restriction is enabled
+   * Check if any workspaces are blocked (access is open by default)
    */
   get hasWorkspaceRestriction(): boolean {
-    return this.config.allowedWorkspaceIds !== undefined && this.config.allowedWorkspaceIds.length > 0;
+    return this.config.blockedWorkspaceIds !== undefined && this.config.blockedWorkspaceIds.length > 0;
   }
 
   /**
-   * Check if a workspace ID is in the allowed list (or if no restriction is set)
+   * Check if a workspace ID is accessible (i.e. not on the blocklist)
    */
   isWorkspaceAllowed(workspaceId: string): boolean {
     if (!this.hasWorkspaceRestriction) {
       return true;
     }
-    return this.config.allowedWorkspaceIds!.includes(workspaceId);
+    return !this.config.blockedWorkspaceIds!.includes(workspaceId);
   }
 
   /**
-   * Check if board restriction is enabled
+   * Check if any boards are blocked (access is open by default)
    */
   get hasBoardRestriction(): boolean {
-    return this.config.allowedBoardIds !== undefined && this.config.allowedBoardIds.length > 0;
+    return this.config.blockedBoardIds !== undefined && this.config.blockedBoardIds.length > 0;
   }
 
   /**
-   * Check if a board ID is in the allowed list (or if no restriction is set)
+   * Check if a board ID is accessible (i.e. not on the blocklist)
    */
   isBoardAllowed(boardId: string): boolean {
     if (!this.hasBoardRestriction) {
       return true;
     }
-    return this.config.allowedBoardIds!.includes(boardId);
+    return !this.config.blockedBoardIds!.includes(boardId);
   }
 
   /**
-   * Validate board access, throwing an error if restricted
+   * Validate board access, throwing an error if the board is blocked
    */
   private validateBoardAccess(boardId: string): void {
     if (!this.isBoardAllowed(boardId)) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Access to board '${boardId}' is not allowed. Allowed boards: ${this.config.allowedBoardIds!.join(', ')}`
+        `Access to board '${boardId}' is blocked by TRELLO_BLOCKED_BOARDS.`
       );
     }
   }
@@ -270,13 +270,13 @@ export class TrelloClient {
   }
 
   /**
-   * Validate workspace access, throwing an error if restricted
+   * Validate workspace access, throwing an error if the workspace is blocked
    */
   private validateWorkspaceAccess(workspaceId: string): void {
     if (!this.isWorkspaceAllowed(workspaceId)) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Access to workspace '${workspaceId}' is not allowed. Allowed workspaces: ${this.config.allowedWorkspaceIds!.join(', ')}`
+        `Access to workspace '${workspaceId}' is blocked by TRELLO_BLOCKED_WORKSPACES.`
       );
     }
   }
@@ -295,7 +295,7 @@ export class TrelloClient {
 
   /**
    * Set the active workspace
-   * Validates against allowedWorkspaceIds if configured
+   * Validates against blockedWorkspaceIds if configured
    */
   async setActiveWorkspace(workspaceId: string): Promise<TrelloWorkspace> {
     // Validate workspace access before proceeding
@@ -341,7 +341,7 @@ export class TrelloClient {
 
   /**
    * List all boards the user has access to
-   * If allowedWorkspaceIds is configured, only returns boards from allowed workspaces
+   * Boards in blocked workspaces and blocked boards are filtered out
    */
   async listBoards(): Promise<TrelloBoard[]> {
     return this.handleRequest(async () => {
@@ -372,7 +372,7 @@ export class TrelloClient {
 
   /**
    * List all workspaces the user has access to
-   * If allowedWorkspaceIds is configured, only returns workspaces in that list
+   * Blocked workspaces are filtered out
    */
   async listWorkspaces(): Promise<TrelloWorkspace[]> {
     return this.handleRequest(async () => {
@@ -399,7 +399,7 @@ export class TrelloClient {
 
   /**
    * List boards in a specific workspace
-   * Validates against allowedWorkspaceIds if configured
+   * Validates against blockedWorkspaceIds if configured; blocked boards are filtered out
    */
   async listBoardsInWorkspace(workspaceId: string): Promise<TrelloBoard[]> {
     // Validate workspace access before proceeding
@@ -417,7 +417,8 @@ export class TrelloClient {
 
   /**
    * Create a new board
-   * Validates target workspace against allowedWorkspaceIds if configured
+   * Validates the target workspace against the blocklist if one is specified.
+   * Board blocklists do not prevent creation: a brand-new board cannot be on the blocklist.
    */
   async createBoard(params: {
     name: string;
@@ -426,24 +427,11 @@ export class TrelloClient {
     defaultLabels?: boolean;
     defaultLists?: boolean;
   }): Promise<TrelloBoard> {
-    if (this.hasBoardRestriction) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Board restrictions are enabled, so creating new boards is disabled. Allowed boards: ${this.config.allowedBoardIds!.join(', ')}`
-      );
-    }
-
     // Determine the target workspace
     const targetWorkspace = params.idOrganization ?? this.activeConfig.workspaceId;
 
-    // When workspace restrictions are enabled, require a valid workspace
-    if (this.hasWorkspaceRestriction) {
-      if (!targetWorkspace) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Workspace restrictions are enabled but no workspace was specified. Provide idOrganization or set an active workspace. Allowed workspaces: ${this.config.allowedWorkspaceIds!.join(', ')}`
-        );
-      }
+    // Refuse to create boards inside a blocked workspace
+    if (targetWorkspace) {
       this.validateWorkspaceAccess(targetWorkspace);
     }
 

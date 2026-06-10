@@ -95,9 +95,10 @@ TRELLO_WORKSPACE_ID=your-workspace-id
 # Optional: HTTPS proxy URL (for corporate proxies or restricted networks)
 https_proxy=http://your-proxy:8080
 
-# Optional: Restrict access to specific workspaces (comma-separated IDs)
-# If set, only the listed workspaces will be accessible via MCP tools
-TRELLO_ALLOWED_WORKSPACES=workspace-id-1,workspace-id-2
+# Optional: Block access to specific workspaces/boards (comma-separated IDs)
+# Access is open by default; listed IDs are denied
+TRELLO_BLOCKED_WORKSPACES=workspace-id-1,workspace-id-2
+TRELLO_BLOCKED_BOARDS=board-id-1,board-id-2
 ```
 
 > **Proxy Support:** If you're behind a corporate proxy or in an environment that routes traffic through a proxy, set the `https_proxy` or `HTTPS_PROXY` environment variable. The server will automatically route all Trello API requests through the specified proxy.
@@ -125,28 +126,31 @@ Starting with version 0.3.0, the MCP server supports multiple ways to work with 
 
 This allows you to work with multiple boards and workspaces without restarting the server.
 
-### Workspace Access Restriction
+### Workspace and Board Blocklists
 
-You can optionally restrict MCP access to specific workspaces using the `TRELLO_ALLOWED_WORKSPACES` environment variable. This is useful for:
+Access is **open by default**: every workspace and board the token can reach is available. You can deny specific workspaces or boards with the `TRELLO_BLOCKED_WORKSPACES` and `TRELLO_BLOCKED_BOARDS` environment variables. This is useful for:
 
-- **Security**: Limiting AI agent access to only approved workspaces
-- **Multi-tenant setups**: Ensuring agents only access relevant workspaces
-- **Testing**: Isolating test environments from production data
+- **Security**: Keeping AI agents out of sensitive workspaces or boards
+- **Multi-tenant setups**: Hiding irrelevant workspaces from agents
+- **Testing**: Shielding production boards from test agents
 
-When `TRELLO_ALLOWED_WORKSPACES` is set:
-- `list_workspaces` only returns workspaces in the allowed list
-- `list_boards` only returns boards from allowed workspaces
-- `set_active_workspace` rejects workspaces not in the allowed list
-- `list_boards_in_workspace` rejects non-allowed workspace IDs
-- `create_board` rejects creation in non-allowed workspaces
+When a blocklist is set:
+- `list_workspaces` excludes blocked workspaces
+- `list_boards` excludes blocked boards and boards in blocked workspaces
+- `set_active_workspace` / `set_active_board` reject blocked IDs
+- `list_boards_in_workspace` rejects blocked workspace IDs and excludes blocked boards
+- `create_board` rejects creation inside a blocked workspace (a board blocklist does not prevent creating new boards)
 
 Example configuration:
 ```bash
-# Only allow access to two specific workspaces
-TRELLO_ALLOWED_WORKSPACES=697c549ce04dc460af133a75,5f8a3b2c1d4e5f6a7b8c9d0e
+# Deny access to one workspace and one board
+TRELLO_BLOCKED_WORKSPACES=697c549ce04dc460af133a75
+TRELLO_BLOCKED_BOARDS=5f8a3b2c1d4e5f6a7b8c9d0e
 ```
 
-If `TRELLO_ALLOWED_WORKSPACES` is not set or empty, all workspaces the token has access to will be available (default behaviour).
+If neither variable is set, everything the token can access is available (default behaviour).
+
+> **Migration note:** the legacy `TRELLO_ALLOWED_WORKSPACES` / `TRELLO_ALLOWED_BOARDS` allowlist variables are no longer supported. The server fails fast at startup if they are set, rather than silently widening access — remove them and, if needed, list the IDs to deny in the blocklist variables instead.
 
 #### Example Workflow
 
