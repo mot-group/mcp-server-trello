@@ -52,6 +52,9 @@ export class TrelloClient {
     if (this.activeConfig.boardId) {
       this.validateBoardAccess(this.activeConfig.boardId);
     }
+    if (this.activeConfig.workspaceId) {
+      this.validateWorkspaceAccess(this.activeConfig.workspaceId);
+    }
     const axiosConfig: CreateAxiosDefaults = {
       baseURL: 'https://api.trello.com/1',
       params: {

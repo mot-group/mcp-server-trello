@@ -23,6 +23,7 @@ class TrelloServer {
     const apiKey = process.env.TRELLO_API_KEY;
     const token = process.env.TRELLO_TOKEN;
     const defaultBoardId = process.env.TRELLO_BOARD_ID;
+    const defaultWorkspaceId = process.env.TRELLO_WORKSPACE_ID;
     const blockedWorkspacesEnv = process.env.TRELLO_BLOCKED_WORKSPACES;
     const blockedBoardsEnv = process.env.TRELLO_BLOCKED_BOARDS;
 
@@ -60,6 +61,7 @@ class TrelloServer {
       token,
       defaultBoardId,
       boardId: defaultBoardId,
+      workspaceId: defaultWorkspaceId,
       blockedWorkspaceIds,
       blockedBoardIds,
     });

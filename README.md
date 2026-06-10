@@ -73,11 +73,8 @@ For AI agents, start with `skill/SKILL.md` rather than this README. The README
 is the human-facing overview; the skill references are the operational surface
 for tool selection and Trello workflow rules.
 
-Maintainers can refresh the bundled source before packaging with:
-
-```bash
-mise run package
-```
+There is no packaging/bundling step: the skill builds directly from this
+repository's `src/` at install time (`mise run ci` runs the tests).
 
 ## Configuration
 

@@ -45,6 +45,7 @@ vi.mock('fs/promises', () => ({
 function createClient(overrides?: {
   boardId?: string;
   defaultBoardId?: string;
+  workspaceId?: string;
   blockedWorkspaceIds?: string[];
   blockedBoardIds?: string[];
 }) {
@@ -53,6 +54,7 @@ function createClient(overrides?: {
     token: 'test-token',
     boardId: overrides?.boardId,
     defaultBoardId: overrides?.defaultBoardId,
+    workspaceId: overrides?.workspaceId,
     blockedWorkspaceIds: overrides?.blockedWorkspaceIds,
     blockedBoardIds: overrides?.blockedBoardIds,
   });
@@ -249,6 +251,26 @@ describe('TrelloClient', () => {
         'board creation requires an explicit workspace'
       );
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it('should use the configured default workspace for board creation under a workspace blocklist', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: { id: 'new-board' } });
+      const client = createClient({
+        workspaceId: 'other-workspace',
+        blockedWorkspaceIds: ['blocked-workspace'],
+      });
+
+      await client.createBoard({ name: 'New' });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+        '/boards',
+        expect.objectContaining({ idOrganization: 'other-workspace' })
+      );
+    });
+
+    it('should reject a configured default workspace that is on the blocklist', () => {
+      expect(() =>
+        createClient({ workspaceId: 'blocked-workspace', blockedWorkspaceIds: ['blocked-workspace'] })
+      ).toThrow("Access to workspace 'blocked-workspace' is blocked");
     });
 
     it('should reject fetching a blocked workspace by ID', async () => {
