@@ -24,11 +24,14 @@ Before using Trello tools, verify that the local server has been installed.
    variables deny specific IDs. The legacy `TRELLO_ALLOWED_*` variables are no
    longer supported and fail fast at startup.
 
-The install script builds from the repository root source and requires Bun and a
-full repository clone. There is deliberately no registry fallback: the published
-package is the upstream server without this fork's tool profiles and access
-blocklists, and unpinned registry code must not run with Trello credentials in
-the environment.
+The install script builds from a full clone of this repository and requires Bun.
+When the skill directory lives inside the repository, the clone is found
+automatically; when the skill was copied standalone into an agent skills
+directory, clone the repository and set `TRELLO_MCP_SOURCE_REPO` to the clone
+path when running `install.sh`. There is deliberately no registry fallback: the
+published package is the upstream server without this fork's tool profiles and
+access blocklists, and unpinned registry code must not run with Trello
+credentials in the environment.
 
 ## Reading Order
 

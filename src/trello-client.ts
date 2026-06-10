@@ -609,7 +609,7 @@ export class TrelloClient {
     await this.validateListAccess(listId);
     const effectiveBoardId = boardId || this.defaultBoardId;
     if (effectiveBoardId) {
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
     }
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.put(`/cards/${cardId}`, {
@@ -666,7 +666,7 @@ export class TrelloClient {
   ): Promise<TrelloList> {
     await this.validateListAccess(listId);
     if (params.idBoard) {
-      this.validateBoardAccess(params.idBoard);
+      await this.validateBoardScopedAccess(params.idBoard);
     }
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.put(`/lists/${listId}`, params);
@@ -861,7 +861,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const response = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`
@@ -904,7 +904,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const checklistsResponse = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`
@@ -951,7 +951,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const response = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`
@@ -1002,7 +1002,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const response = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`

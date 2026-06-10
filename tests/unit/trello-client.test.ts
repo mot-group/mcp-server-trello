@@ -179,6 +179,39 @@ describe('TrelloClient', () => {
       expect(result).toEqual([cards[0]]);
     });
 
+    it('should reject moving a card to a board in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/cards/c1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/lists/l1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.moveCard('board-in-blocked-ws', 'c1', 'l1')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
+
+    it('should reject moving a list to a board in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/lists/l1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(
+        client.updateList('l1', { idBoard: 'board-in-blocked-ws' })
+      ).rejects.toThrow("Access to workspace 'blocked-workspace' is blocked");
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
+
     it('should cache board-to-workspace lookups across checks', async () => {
       mockAxiosInstance.get.mockImplementation(async (url: string) => {
         if (url === '/boards/board-elsewhere') return { data: { idOrganization: 'other-workspace' } };

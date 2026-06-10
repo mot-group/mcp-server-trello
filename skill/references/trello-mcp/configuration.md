@@ -21,6 +21,15 @@ package is the upstream server without this fork's tool profiles and access
 blocklists, and unpinned registry code must not run with Trello credentials in
 the environment.
 
+The clone is located automatically when the skill directory lives inside the
+repository. If the skill was copied standalone into an agent skills directory,
+clone the repository and pass its path explicitly:
+
+```bash
+git clone https://github.com/mot-group/mcp-server-trello.git
+TRELLO_MCP_SOURCE_REPO=/path/to/mcp-server-trello bash {skill-root}/scripts/install.sh
+```
+
 ## MCP command
 
 For clients that need a direct command, use the built server path.

@@ -5,22 +5,33 @@ echo "Installing Trello MCP skill server..."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SKILL_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
-# Build from the repository root source — the single source of truth. The skill does not
-# bundle a second copy of the server (it inevitably drifted from the real runtime), and
+# Build from a full clone of this repository — the single source of truth. The skill does
+# not bundle a second copy of the server (it inevitably drifted from the real runtime), and
 # there is deliberately NO registry fallback: the published @delorenj/mcp-server-trello
 # package is the upstream server without this fork's tool profiles and access blocklists,
 # and pulling unpinned registry code into a process that holds TRELLO_API_KEY/TRELLO_TOKEN
 # would bypass both review pinning and the documented access-control behavior.
-REPO_ROOT="$(cd "$SKILL_ROOT/.." && pwd)"
-SOURCE_DIR="$REPO_ROOT"
+#
+# Source resolution order:
+#   1. TRELLO_MCP_SOURCE_REPO — explicit path to a clone. Required when the skill
+#      directory was copied standalone into an agent skills directory.
+#   2. The skill's parent directory — covers running from inside the repo itself.
 DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
 INSTALL_DIR="$DATA_HOME/mcp-server-trello-skill/server"
 BUILD_FILE="$INSTALL_DIR/build/index.js"
 
-if [ ! -d "$SOURCE_DIR/src" ] || [ ! -f "$SOURCE_DIR/package.json" ]; then
-  echo "Unable to install: repository source not found at $SOURCE_DIR." >&2
-  echo "Run this script from a full clone of mot-group/mcp-server-trello (the skill" >&2
-  echo "directory is not installable standalone)." >&2
+is_server_repo() {
+  [ -d "$1/src" ] && [ -f "$1/package.json" ] && [ -f "$1/bun.lock" ] \
+    && grep -q '"@delorenj/mcp-server-trello"' "$1/package.json"
+}
+
+SOURCE_DIR="${TRELLO_MCP_SOURCE_REPO:-$(cd "$SKILL_ROOT/.." && pwd)}"
+if ! is_server_repo "$SOURCE_DIR"; then
+  echo "Unable to install: no server source at '$SOURCE_DIR'." >&2
+  echo "This skill builds from a full clone of mot-group/mcp-server-trello. Either run it" >&2
+  echo "from inside the repository, or clone it and point the installer at the clone:" >&2
+  echo "  git clone https://github.com/mot-group/mcp-server-trello.git" >&2
+  echo "  TRELLO_MCP_SOURCE_REPO=/path/to/mcp-server-trello bash $SCRIPT_DIR/install.sh" >&2
   exit 1
 fi
 
