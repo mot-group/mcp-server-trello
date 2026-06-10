@@ -114,6 +114,85 @@ describe('TrelloClient', () => {
       await client.listBoardsInWorkspace('other-workspace');
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/organizations/other-workspace/boards');
     });
+
+    it('should reject direct access to a board inside a blocked workspace', async () => {
+      // getBoardById resolves the board's workspace before fetching the board
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { idOrganization: 'blocked-workspace' } });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.getBoardById('board-in-blocked-ws')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/boards/board-in-blocked-ws', {
+        params: { fields: 'idOrganization' },
+      });
+    });
+
+    it('should reject board-scoped operations when the board is in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { idOrganization: 'blocked-workspace' } });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.getLists('board-in-blocked-ws')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+    });
+
+    it('should reject card creation via a list on a board in a blocked workspace', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: { idBoard: 'board-in-blocked-ws' } }) // list -> board
+        .mockResolvedValueOnce({ data: { idOrganization: 'blocked-workspace' } }); // board -> workspace
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(
+        client.addCard(undefined, { listId: 'list-in-blocked-ws', name: 'Card' })
+      ).rejects.toThrow("Access to workspace 'blocked-workspace' is blocked");
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it('should allow board-scoped operations when the board workspace is not blocked', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: { idOrganization: 'other-workspace' } }) // board -> workspace
+        .mockResolvedValueOnce({ data: [{ id: 'l1' }] }); // the lists fetch
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      const lists = await client.getLists('board-elsewhere');
+      expect(lists).toEqual([{ id: 'l1' }]);
+    });
+
+    it('should filter my cards on boards in blocked workspaces', async () => {
+      const cards = [
+        { id: 'c1', idBoard: 'board-ok', name: 'Kept' },
+        { id: 'c2', idBoard: 'board-in-blocked-ws', name: 'Dropped' },
+      ];
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/members/me/cards') return { data: cards };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      const result = await client.getMyCards();
+      expect(result).toEqual([cards[0]]);
+    });
+
+    it('should cache board-to-workspace lookups across checks', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/boards/board-elsewhere') return { data: { idOrganization: 'other-workspace' } };
+        return { data: [] };
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await client.getLists('board-elsewhere');
+      await client.getLists('board-elsewhere');
+      const orgLookups = mockAxiosInstance.get.mock.calls.filter(
+        ([url, opts]) => url === '/boards/board-elsewhere' && opts?.params?.fields === 'idOrganization'
+      );
+      expect(orgLookups).toHaveLength(1);
+    });
   });
 
   describe('listBoards', () => {

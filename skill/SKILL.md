@@ -24,10 +24,11 @@ Before using Trello tools, verify that the local server has been installed.
    variables deny specific IDs. The legacy `TRELLO_ALLOWED_*` variables are no
    longer supported and fail fast at startup.
 
-The install script builds from the repository root source when Bun is available.
-If Bun is not available (or the skill directory is used standalone, outside the
-repository), it falls back to the published package install path and creates a
-local wrapper at the same `build/index.js` check path.
+The install script builds from the repository root source and requires Bun and a
+full repository clone. There is deliberately no registry fallback: the published
+package is the upstream server without this fork's tool profiles and access
+blocklists, and unpinned registry code must not run with Trello credentials in
+the environment.
 
 ## Reading Order
 

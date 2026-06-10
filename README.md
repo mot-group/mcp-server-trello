@@ -51,10 +51,11 @@ bash skill/scripts/install.sh
 ```
 
 The installer builds the MCP server from this repository's root `src/` (the
-single source of truth) when Bun is available. If Bun is unavailable, it falls
-back to the published Smithery install path for `@delorenj/mcp-server-trello`
-and creates the same local `build/index.js` command path used by the skill
-activation check.
+single source of truth) and requires Bun plus a full repository clone. There is
+deliberately no registry fallback: the published `@delorenj/mcp-server-trello`
+package is the upstream server without this fork's tool profiles and access
+blocklists, and unpinned registry code must not run with Trello credentials in
+the environment.
 
 ## Skill package structure
 

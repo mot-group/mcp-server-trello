@@ -12,12 +12,14 @@ Run the installer from the skill root.
 bash {skill-root}/scripts/install.sh
 ```
 
-When Bun is available, the installer copies the repository's `src/` plus build
-manifests to `{XDG_DATA_HOME:-$HOME/.local/share}/mcp-server-trello-skill/server`,
-installs dependencies, and builds `build/index.js`. When Bun is unavailable (or
-the skill directory is used standalone, outside the repository), it falls back
-to the published Smithery installation path and creates a local
-`build/index.js` wrapper that launches the published package through `npx`.
+The installer copies the repository's `src/` plus build manifests to
+`{XDG_DATA_HOME:-$HOME/.local/share}/mcp-server-trello-skill/server`, installs
+dependencies with `bun install --frozen-lockfile --ignore-scripts`, and builds
+`build/index.js`. It requires Bun and a full repository clone, and fails fast
+otherwise — there is deliberately no registry fallback, because the published
+package is the upstream server without this fork's tool profiles and access
+blocklists, and unpinned registry code must not run with Trello credentials in
+the environment.
 
 ## MCP command
 
