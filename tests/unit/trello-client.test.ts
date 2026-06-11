@@ -45,16 +45,18 @@ vi.mock('fs/promises', () => ({
 function createClient(overrides?: {
   boardId?: string;
   defaultBoardId?: string;
-  allowedWorkspaceIds?: string[];
-  allowedBoardIds?: string[];
+  workspaceId?: string;
+  blockedWorkspaceIds?: string[];
+  blockedBoardIds?: string[];
 }) {
   return new TrelloClient({
     apiKey: 'test-key',
     token: 'test-token',
     boardId: overrides?.boardId,
     defaultBoardId: overrides?.defaultBoardId,
-    allowedWorkspaceIds: overrides?.allowedWorkspaceIds,
-    allowedBoardIds: overrides?.allowedBoardIds,
+    workspaceId: overrides?.workspaceId,
+    blockedWorkspaceIds: overrides?.blockedWorkspaceIds,
+    blockedBoardIds: overrides?.blockedBoardIds,
   });
 }
 
@@ -74,31 +76,238 @@ describe('TrelloClient', () => {
       );
     });
 
-    it('should not enable workspace restrictions when allowed workspaces are unset or empty', () => {
+    it('should not enable workspace restrictions when blocked workspaces are unset or empty', () => {
       expect(createClient().hasWorkspaceRestriction).toBe(false);
-      expect(createClient({ allowedWorkspaceIds: [] }).hasWorkspaceRestriction).toBe(false);
+      expect(createClient({ blockedWorkspaceIds: [] }).hasWorkspaceRestriction).toBe(false);
     });
 
-    it('should not enable board restrictions when allowed boards are unset or empty', () => {
+    it('should not enable board restrictions when blocked boards are unset or empty', () => {
       expect(createClient().hasBoardRestriction).toBe(false);
-      expect(createClient({ allowedBoardIds: [] }).hasBoardRestriction).toBe(false);
+      expect(createClient({ blockedBoardIds: [] }).hasBoardRestriction).toBe(false);
     });
 
-    it('should reject a configured active board outside the board allowlist', () => {
+    it('should allow boards and workspaces by default when nothing is blocked', () => {
+      const client = createClient();
+      expect(client.isBoardAllowed('any-board')).toBe(true);
+      expect(client.isWorkspaceAllowed('any-workspace')).toBe(true);
+    });
+
+    it('should reject a configured active board that is on the blocklist', () => {
       expect(() =>
-        createClient({ boardId: 'blocked-board', allowedBoardIds: ['allowed-board'] })
-      ).toThrow("Access to board 'blocked-board' is not allowed");
+        createClient({ boardId: 'blocked-board', blockedBoardIds: ['blocked-board'] })
+      ).toThrow("Access to board 'blocked-board' is blocked");
     });
   });
 
   describe('workspace restriction', () => {
-    it('should reject access to a non-allowed workspace before making a request', async () => {
-      const client = createClient({ allowedWorkspaceIds: ['allowed-workspace'] });
+    it('should reject access to a blocked workspace before making a request', async () => {
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
 
       await expect(client.listBoardsInWorkspace('blocked-workspace')).rejects.toThrow(
-        "Access to workspace 'blocked-workspace' is not allowed"
+        "Access to workspace 'blocked-workspace' is blocked"
       );
       expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it('should allow workspaces that are not on the blocklist', async () => {
+      mockAxiosInstance.get.mockResolvedValue({ data: [] });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await client.listBoardsInWorkspace('other-workspace');
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/organizations/other-workspace/boards');
+    });
+
+    it('should reject direct access to a board inside a blocked workspace', async () => {
+      // getBoardById resolves the board's workspace before fetching the board
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { idOrganization: 'blocked-workspace' } });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.getBoardById('board-in-blocked-ws')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+      expect(mockAxiosInstance.get).toHaveBeenCalledWith('/boards/board-in-blocked-ws', {
+        params: { fields: 'idOrganization' },
+      });
+    });
+
+    it('should reject board-scoped operations when the board is in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockResolvedValueOnce({ data: { idOrganization: 'blocked-workspace' } });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.getLists('board-in-blocked-ws')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.get).toHaveBeenCalledTimes(1);
+    });
+
+    it('should reject card creation via a list on a board in a blocked workspace', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: { idBoard: 'board-in-blocked-ws' } }) // list -> board
+        .mockResolvedValueOnce({ data: { idOrganization: 'blocked-workspace' } }); // board -> workspace
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(
+        client.addCard(undefined, { listId: 'list-in-blocked-ws', name: 'Card' })
+      ).rejects.toThrow("Access to workspace 'blocked-workspace' is blocked");
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it('should allow board-scoped operations when the board workspace is not blocked', async () => {
+      mockAxiosInstance.get
+        .mockResolvedValueOnce({ data: { idOrganization: 'other-workspace' } }) // board -> workspace
+        .mockResolvedValueOnce({ data: [{ id: 'l1' }] }); // the lists fetch
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      const lists = await client.getLists('board-elsewhere');
+      expect(lists).toEqual([{ id: 'l1' }]);
+    });
+
+    it('should filter my cards on boards in blocked workspaces', async () => {
+      const cards = [
+        { id: 'c1', idBoard: 'board-ok', name: 'Kept' },
+        { id: 'c2', idBoard: 'board-in-blocked-ws', name: 'Dropped' },
+      ];
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/members/me/cards') return { data: cards };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      const result = await client.getMyCards();
+      expect(result).toEqual([cards[0]]);
+    });
+
+    it('should reject moving a card to a board in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/cards/c1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/lists/l1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.moveCard('board-in-blocked-ws', 'c1', 'l1')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
+
+    it('should reject moving a list to a board in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/lists/l1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(
+        client.updateList('l1', { idBoard: 'board-in-blocked-ws' })
+      ).rejects.toThrow("Access to workspace 'blocked-workspace' is blocked");
+      expect(mockAxiosInstance.put).not.toHaveBeenCalled();
+    });
+
+    it('should keep personal boards (no workspace) when a workspace blocklist is set', async () => {
+      const boards = [
+        { id: 'personal-board', idOrganization: null, name: 'Personal' },
+        { id: 'ws-board', idOrganization: 'other-workspace', name: 'In workspace' },
+        { id: 'blocked-ws-board', idOrganization: 'blocked-workspace', name: 'Blocked' },
+      ];
+      mockAxiosInstance.get.mockResolvedValue({ data: boards });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      const result = await client.listBoards();
+      expect(result).toEqual([boards[0], boards[1]]);
+    });
+
+    it('should reject copying a checklist from a board in a blocked workspace', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/cards/c1') return { data: { idBoard: 'board-ok' } };
+        if (url === '/boards/board-ok') return { data: { idOrganization: 'other-workspace' } };
+        if (url === '/checklists/cl-blocked') return { data: { idBoard: 'board-in-blocked-ws' } };
+        if (url === '/boards/board-in-blocked-ws')
+          return { data: { idOrganization: 'blocked-workspace' } };
+        throw new Error(`unexpected request: ${url}`);
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(
+        client.copyChecklist({ sourceChecklistId: 'cl-blocked', cardId: 'c1' })
+      ).rejects.toThrow("Access to workspace 'blocked-workspace' is blocked");
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it('should require an explicit workspace for board creation when a workspace blocklist is set', async () => {
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.createBoard({ name: 'New' })).rejects.toThrow(
+        'board creation requires an explicit workspace'
+      );
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
+    });
+
+    it('should use the configured default workspace for board creation under a workspace blocklist', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: { id: 'new-board' } });
+      const client = createClient({
+        workspaceId: 'other-workspace',
+        blockedWorkspaceIds: ['blocked-workspace'],
+      });
+
+      await client.createBoard({ name: 'New' });
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith(
+        '/boards',
+        expect.objectContaining({ idOrganization: 'other-workspace' })
+      );
+    });
+
+    it('should reject a configured default workspace that is on the blocklist', () => {
+      expect(() =>
+        createClient({ workspaceId: 'blocked-workspace', blockedWorkspaceIds: ['blocked-workspace'] })
+      ).toThrow("Access to workspace 'blocked-workspace' is blocked");
+    });
+
+    it('should reject fetching a blocked workspace by ID', async () => {
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.getWorkspaceById('blocked-workspace')).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(mockAxiosInstance.get).not.toHaveBeenCalled();
+    });
+
+    it('should not readopt a saved active workspace that is now blocked', async () => {
+      const fs = await import('fs/promises');
+      vi.mocked(fs.readFile).mockResolvedValueOnce(
+        JSON.stringify({ workspaceId: 'blocked-workspace' }) as never
+      );
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(client.loadConfig()).rejects.toThrow(
+        "Access to workspace 'blocked-workspace' is blocked"
+      );
+      expect(client.activeWorkspaceId).toBeUndefined();
+    });
+
+    it('should cache board-to-workspace lookups across checks', async () => {
+      mockAxiosInstance.get.mockImplementation(async (url: string) => {
+        if (url === '/boards/board-elsewhere') return { data: { idOrganization: 'other-workspace' } };
+        return { data: [] };
+      });
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await client.getLists('board-elsewhere');
+      await client.getLists('board-elsewhere');
+      const orgLookups = mockAxiosInstance.get.mock.calls.filter(
+        ([url, opts]) => url === '/boards/board-elsewhere' && opts?.params?.fields === 'idOrganization'
+      );
+      expect(orgLookups).toHaveLength(1);
     });
   });
 
@@ -114,7 +323,7 @@ describe('TrelloClient', () => {
       expect(result).toEqual(boards);
     });
 
-    it('should filter boards by allowed workspaces and allowed boards', async () => {
+    it('should filter out blocked workspaces and blocked boards', async () => {
       const boards = [
         { id: 'allowed-board', idOrganization: 'allowed-workspace', name: 'Allowed' },
         { id: 'blocked-board', idOrganization: 'allowed-workspace', name: 'Blocked Board' },
@@ -123,12 +332,33 @@ describe('TrelloClient', () => {
       mockAxiosInstance.get.mockResolvedValue({ data: boards });
 
       const client = createClient({
-        allowedWorkspaceIds: ['allowed-workspace'],
-        allowedBoardIds: ['allowed-board'],
+        blockedWorkspaceIds: ['blocked-workspace'],
+        blockedBoardIds: ['blocked-board'],
       });
       const result = await client.listBoards();
 
       expect(result).toEqual([boards[0]]);
+    });
+  });
+
+  describe('createBoard', () => {
+    it('should allow board creation even when a board blocklist is configured', async () => {
+      mockAxiosInstance.post.mockResolvedValue({ data: { id: 'new-board', name: 'New' } });
+
+      const client = createClient({ blockedBoardIds: ['blocked-board'] });
+      const result = await client.createBoard({ name: 'New' });
+
+      expect(mockAxiosInstance.post).toHaveBeenCalledWith('/boards', expect.objectContaining({ name: 'New' }));
+      expect(result).toEqual({ id: 'new-board', name: 'New' });
+    });
+
+    it('should refuse to create a board in a blocked workspace', async () => {
+      const client = createClient({ blockedWorkspaceIds: ['blocked-workspace'] });
+
+      await expect(
+        client.createBoard({ name: 'New', idOrganization: 'blocked-workspace' })
+      ).rejects.toThrow("Access to workspace 'blocked-workspace' is blocked");
+      expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
   });
 
@@ -145,10 +375,10 @@ describe('TrelloClient', () => {
     });
 
     it('should reject a blocked board before making a request', async () => {
-      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+      const client = createClient({ blockedBoardIds: ['blocked-board'] });
 
       await expect(client.getBoardById('blocked-board')).rejects.toThrow(
-        "Access to board 'blocked-board' is not allowed"
+        "Access to board 'blocked-board' is blocked"
       );
       expect(mockAxiosInstance.get).not.toHaveBeenCalled();
     });
@@ -167,10 +397,10 @@ describe('TrelloClient', () => {
     });
 
     it('should reject a blocked board before listing lists', async () => {
-      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+      const client = createClient({ blockedBoardIds: ['blocked-board'] });
 
       await expect(client.getLists('blocked-board')).rejects.toThrow(
-        "Access to board 'blocked-board' is not allowed"
+        "Access to board 'blocked-board' is blocked"
       );
       expect(mockAxiosInstance.get).not.toHaveBeenCalled();
     });
@@ -240,11 +470,11 @@ describe('TrelloClient', () => {
     it('should reject card creation when the target list is on a blocked board', async () => {
       mockAxiosInstance.get.mockResolvedValueOnce({ data: { idBoard: 'blocked-board' } });
 
-      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+      const client = createClient({ blockedBoardIds: ['blocked-board'] });
 
       await expect(
         client.addCard(undefined, { listId: 'list-on-blocked-board', name: 'Card' })
-      ).rejects.toThrow("Access to board 'blocked-board' is not allowed");
+      ).rejects.toThrow("Access to board 'blocked-board' is blocked");
       expect(mockAxiosInstance.post).not.toHaveBeenCalled();
     });
   });
@@ -392,7 +622,7 @@ describe('TrelloClient', () => {
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/members/me/cards');
     });
 
-    it('should filter current user cards by allowed boards when restricted', async () => {
+    it('should filter out current user cards on blocked boards', async () => {
       const cards = [
         { id: 'c1', idBoard: 'allowed-board', name: 'Allowed' },
         { id: 'c2', idBoard: 'blocked-board', name: 'Blocked' },
@@ -400,7 +630,7 @@ describe('TrelloClient', () => {
       ];
       mockAxiosInstance.get.mockResolvedValue({ data: cards });
 
-      const client = createClient({ allowedBoardIds: ['allowed-board'] });
+      const client = createClient({ blockedBoardIds: ['blocked-board'] });
       const result = await client.getMyCards();
 
       expect(mockAxiosInstance.get).toHaveBeenCalledWith('/members/me/cards', {

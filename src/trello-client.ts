@@ -52,6 +52,9 @@ export class TrelloClient {
     if (this.activeConfig.boardId) {
       this.validateBoardAccess(this.activeConfig.boardId);
     }
+    if (this.activeConfig.workspaceId) {
+      this.validateWorkspaceAccess(this.activeConfig.workspaceId);
+    }
     const axiosConfig: CreateAxiosDefaults = {
       baseURL: 'https://api.trello.com/1',
       params: {
@@ -88,12 +91,15 @@ export class TrelloClient {
       const data = await fs.readFile(CONFIG_FILE, 'utf8');
       const savedConfig = JSON.parse(data);
 
-      // Only update boardId and workspaceId, keep credentials from env
+      // Only update boardId and workspaceId, keep credentials from env. Saved state
+      // must pass the blocklists like any other input: a board/workspace that was
+      // active before being blocked must not be readopted from disk.
       if (savedConfig.boardId) {
         this.validateBoardAccess(savedConfig.boardId);
         this.activeConfig.boardId = savedConfig.boardId;
       }
       if (savedConfig.workspaceId) {
+        this.validateWorkspaceAccess(savedConfig.workspaceId);
         this.activeConfig.workspaceId = savedConfig.workspaceId;
       }
     } catch (error) {
@@ -136,49 +142,89 @@ export class TrelloClient {
   }
 
   /**
-   * Check if workspace restriction is enabled
+   * Check if any workspaces are blocked (access is open by default)
    */
   get hasWorkspaceRestriction(): boolean {
-    return this.config.allowedWorkspaceIds !== undefined && this.config.allowedWorkspaceIds.length > 0;
+    return this.config.blockedWorkspaceIds !== undefined && this.config.blockedWorkspaceIds.length > 0;
   }
 
   /**
-   * Check if a workspace ID is in the allowed list (or if no restriction is set)
+   * Check if a workspace ID is accessible (i.e. not on the blocklist)
    */
   isWorkspaceAllowed(workspaceId: string): boolean {
     if (!this.hasWorkspaceRestriction) {
       return true;
     }
-    return this.config.allowedWorkspaceIds!.includes(workspaceId);
+    return !this.config.blockedWorkspaceIds!.includes(workspaceId);
   }
 
   /**
-   * Check if board restriction is enabled
+   * Check if any boards are blocked (access is open by default)
    */
   get hasBoardRestriction(): boolean {
-    return this.config.allowedBoardIds !== undefined && this.config.allowedBoardIds.length > 0;
+    return this.config.blockedBoardIds !== undefined && this.config.blockedBoardIds.length > 0;
   }
 
   /**
-   * Check if a board ID is in the allowed list (or if no restriction is set)
+   * Check if a board ID is accessible (i.e. not on the blocklist)
    */
   isBoardAllowed(boardId: string): boolean {
     if (!this.hasBoardRestriction) {
       return true;
     }
-    return this.config.allowedBoardIds!.includes(boardId);
+    return !this.config.blockedBoardIds!.includes(boardId);
   }
 
   /**
-   * Validate board access, throwing an error if restricted
+   * Validate board access, throwing an error if the board is blocked
    */
   private validateBoardAccess(boardId: string): void {
     if (!this.isBoardAllowed(boardId)) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Access to board '${boardId}' is not allowed. Allowed boards: ${this.config.allowedBoardIds!.join(', ')}`
+        `Access to board '${boardId}' is blocked by TRELLO_BLOCKED_BOARDS.`
       );
     }
+  }
+
+  // boardId -> idOrganization, cached for the session. Boards rarely move between
+  // workspaces; per-session staleness is acceptable for blocklist enforcement.
+  private boardWorkspaceCache = new Map<string, string>();
+
+  private async getWorkspaceIdForBoard(boardId: string): Promise<string> {
+    const cached = this.boardWorkspaceCache.get(boardId);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const workspaceId = await this.handleRequest(async () => {
+      const response = await this.axiosInstance.get(`/boards/${boardId}`, {
+        params: { fields: 'idOrganization' },
+      });
+      return (response.data.idOrganization as string) || '';
+    });
+    this.boardWorkspaceCache.set(boardId, workspaceId);
+    return workspaceId;
+  }
+
+  /**
+   * Enforce the workspace blocklist for board-scoped access: a board inside a blocked
+   * workspace is unreachable even when addressed directly by board ID (or reached via
+   * a list/card/label/action ID). No-op when no workspaces are blocked.
+   */
+  private async validateBoardWorkspaceAccess(boardId: string): Promise<void> {
+    if (!this.hasWorkspaceRestriction) {
+      return;
+    }
+    const workspaceId = await this.getWorkspaceIdForBoard(boardId);
+    if (workspaceId) {
+      this.validateWorkspaceAccess(workspaceId);
+    }
+  }
+
+  /** Board blocklist (sync) plus the board's workspace against the workspace blocklist. */
+  private async validateBoardScopedAccess(boardId: string): Promise<void> {
+    this.validateBoardAccess(boardId);
+    await this.validateBoardWorkspaceAccess(boardId);
   }
 
   private resolveBoardId(
@@ -190,6 +236,16 @@ export class TrelloClient {
       throw new McpError(ErrorCode.InvalidParams, message);
     }
     this.validateBoardAccess(effectiveBoardId);
+    return effectiveBoardId;
+  }
+
+  /** Async variant of resolveBoardId that also enforces the workspace blocklist. */
+  private async resolveBoardIdChecked(
+    boardId?: string,
+    message?: string
+  ): Promise<string> {
+    const effectiveBoardId = this.resolveBoardId(boardId, message);
+    await this.validateBoardWorkspaceAccess(effectiveBoardId);
     return effectiveBoardId;
   }
 
@@ -226,57 +282,80 @@ export class TrelloClient {
   }
 
   private async validateListAccess(listId: string): Promise<void> {
-    if (!this.hasBoardRestriction) {
+    if (!this.hasBoardRestriction && !this.hasWorkspaceRestriction) {
       return;
     }
     const boardId = await this.getBoardIdForList(listId);
     if (!boardId) {
       throw new McpError(ErrorCode.InvalidParams, `Unable to determine board for list '${listId}'`);
     }
-    this.validateBoardAccess(boardId);
+    await this.validateBoardScopedAccess(boardId);
   }
 
   private async validateCardAccess(cardId: string): Promise<void> {
-    if (!this.hasBoardRestriction) {
+    if (!this.hasBoardRestriction && !this.hasWorkspaceRestriction) {
       return;
     }
     const boardId = await this.getBoardIdForCard(cardId);
     if (!boardId) {
       throw new McpError(ErrorCode.InvalidParams, `Unable to determine board for card '${cardId}'`);
     }
-    this.validateBoardAccess(boardId);
+    await this.validateBoardScopedAccess(boardId);
   }
 
   private async validateLabelAccess(labelId: string): Promise<void> {
-    if (!this.hasBoardRestriction) {
+    if (!this.hasBoardRestriction && !this.hasWorkspaceRestriction) {
       return;
     }
     const boardId = await this.getBoardIdForLabel(labelId);
     if (!boardId) {
       throw new McpError(ErrorCode.InvalidParams, `Unable to determine board for label '${labelId}'`);
     }
-    this.validateBoardAccess(boardId);
+    await this.validateBoardScopedAccess(boardId);
   }
 
   private async validateActionAccess(actionId: string): Promise<void> {
-    if (!this.hasBoardRestriction) {
+    if (!this.hasBoardRestriction && !this.hasWorkspaceRestriction) {
       return;
     }
     const boardId = await this.getBoardIdForAction(actionId);
     if (!boardId) {
       throw new McpError(ErrorCode.InvalidParams, `Unable to determine board for action '${actionId}'`);
     }
-    this.validateBoardAccess(boardId);
+    await this.validateBoardScopedAccess(boardId);
+  }
+
+  private async getBoardIdForChecklist(checklistId: string): Promise<string | undefined> {
+    return this.handleRequest(async () => {
+      const response = await this.axiosInstance.get(`/checklists/${checklistId}`, {
+        params: { fields: 'idBoard' },
+      });
+      return response.data.idBoard || '';
+    });
+  }
+
+  private async validateChecklistAccess(checklistId: string): Promise<void> {
+    if (!this.hasBoardRestriction && !this.hasWorkspaceRestriction) {
+      return;
+    }
+    const boardId = await this.getBoardIdForChecklist(checklistId);
+    if (!boardId) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        `Unable to determine board for checklist '${checklistId}'`
+      );
+    }
+    await this.validateBoardScopedAccess(boardId);
   }
 
   /**
-   * Validate workspace access, throwing an error if restricted
+   * Validate workspace access, throwing an error if the workspace is blocked
    */
   private validateWorkspaceAccess(workspaceId: string): void {
     if (!this.isWorkspaceAllowed(workspaceId)) {
       throw new McpError(
         ErrorCode.InvalidParams,
-        `Access to workspace '${workspaceId}' is not allowed. Allowed workspaces: ${this.config.allowedWorkspaceIds!.join(', ')}`
+        `Access to workspace '${workspaceId}' is blocked by TRELLO_BLOCKED_WORKSPACES.`
       );
     }
   }
@@ -295,7 +374,7 @@ export class TrelloClient {
 
   /**
    * Set the active workspace
-   * Validates against allowedWorkspaceIds if configured
+   * Validates against blockedWorkspaceIds if configured
    */
   async setActiveWorkspace(workspaceId: string): Promise<TrelloWorkspace> {
     // Validate workspace access before proceeding
@@ -341,16 +420,19 @@ export class TrelloClient {
 
   /**
    * List all boards the user has access to
-   * If allowedWorkspaceIds is configured, only returns boards from allowed workspaces
+   * Boards in blocked workspaces and blocked boards are filtered out
    */
   async listBoards(): Promise<TrelloBoard[]> {
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get('/members/me/boards');
       let boards: TrelloBoard[] = response.data;
 
-      // Filter by allowed workspaces if restriction is enabled
+      // Drop boards in blocked workspaces. Boards with no workspace (personal boards)
+      // are kept: under the open-by-default blocklist model they are not blocked.
       if (this.hasWorkspaceRestriction) {
-        boards = boards.filter(board => board.idOrganization && this.isWorkspaceAllowed(board.idOrganization));
+        boards = boards.filter(
+          board => !board.idOrganization || this.isWorkspaceAllowed(board.idOrganization)
+        );
       }
       if (this.hasBoardRestriction) {
         boards = boards.filter(board => this.isBoardAllowed(board.id));
@@ -363,7 +445,7 @@ export class TrelloClient {
    * Get a specific board by ID
    */
   async getBoardById(boardId: string): Promise<TrelloBoard> {
-    this.validateBoardAccess(boardId);
+    await this.validateBoardScopedAccess(boardId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get(`/boards/${boardId}`);
       return response.data;
@@ -372,7 +454,7 @@ export class TrelloClient {
 
   /**
    * List all workspaces the user has access to
-   * If allowedWorkspaceIds is configured, only returns workspaces in that list
+   * Blocked workspaces are filtered out
    */
   async listWorkspaces(): Promise<TrelloWorkspace[]> {
     return this.handleRequest(async () => {
@@ -391,6 +473,7 @@ export class TrelloClient {
    * Get a specific workspace by ID
    */
   async getWorkspaceById(workspaceId: string): Promise<TrelloWorkspace> {
+    this.validateWorkspaceAccess(workspaceId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get(`/organizations/${workspaceId}`);
       return response.data;
@@ -399,7 +482,7 @@ export class TrelloClient {
 
   /**
    * List boards in a specific workspace
-   * Validates against allowedWorkspaceIds if configured
+   * Validates against blockedWorkspaceIds if configured; blocked boards are filtered out
    */
   async listBoardsInWorkspace(workspaceId: string): Promise<TrelloBoard[]> {
     // Validate workspace access before proceeding
@@ -417,7 +500,10 @@ export class TrelloClient {
 
   /**
    * Create a new board
-   * Validates target workspace against allowedWorkspaceIds if configured
+   * Validates the target workspace against the blocklist; when a workspace blocklist is
+   * active, an explicit workspace is required (an unscoped creation would be resolved to
+   * a default workspace by Trello with no local validation).
+   * Board blocklists do not prevent creation: a brand-new board cannot be on the blocklist.
    */
   async createBoard(params: {
     name: string;
@@ -426,25 +512,19 @@ export class TrelloClient {
     defaultLabels?: boolean;
     defaultLists?: boolean;
   }): Promise<TrelloBoard> {
-    if (this.hasBoardRestriction) {
-      throw new McpError(
-        ErrorCode.InvalidParams,
-        `Board restrictions are enabled, so creating new boards is disabled. Allowed boards: ${this.config.allowedBoardIds!.join(', ')}`
-      );
-    }
-
     // Determine the target workspace
     const targetWorkspace = params.idOrganization ?? this.activeConfig.workspaceId;
 
-    // When workspace restrictions are enabled, require a valid workspace
-    if (this.hasWorkspaceRestriction) {
-      if (!targetWorkspace) {
-        throw new McpError(
-          ErrorCode.InvalidParams,
-          `Workspace restrictions are enabled but no workspace was specified. Provide idOrganization or set an active workspace. Allowed workspaces: ${this.config.allowedWorkspaceIds!.join(', ')}`
-        );
-      }
+    // Refuse to create boards inside a blocked workspace. With a workspace blocklist
+    // active, also refuse an unscoped creation: Trello would resolve it to a default
+    // workspace server-side, with no local validation against the blocklist.
+    if (targetWorkspace) {
       this.validateWorkspaceAccess(targetWorkspace);
+    } else if (this.hasWorkspaceRestriction) {
+      throw new McpError(
+        ErrorCode.InvalidParams,
+        'TRELLO_BLOCKED_WORKSPACES is set, so board creation requires an explicit workspace: provide idOrganization or set an active workspace.'
+      );
     }
 
     return this.handleRequest(async () => {
@@ -479,7 +559,7 @@ export class TrelloClient {
   }
 
   async getLists(boardId?: string): Promise<TrelloList[]> {
-    const effectiveBoardId = this.resolveBoardId(boardId);
+    const effectiveBoardId = await this.resolveBoardIdChecked(boardId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get(`/boards/${effectiveBoardId}/lists`);
       return response.data;
@@ -487,7 +567,7 @@ export class TrelloClient {
   }
 
   async getRecentActivity(boardId?: string, limit: number = 10, since?: string, before?: string): Promise<TrelloAction[]> {
-    const effectiveBoardId = this.resolveBoardId(boardId);
+    const effectiveBoardId = await this.resolveBoardIdChecked(boardId);
     return this.handleRequest(async () => {
       const params: Record<string, string | number> = { limit };
       if (since) params.since = since;
@@ -571,7 +651,7 @@ export class TrelloClient {
     await this.validateListAccess(listId);
     const effectiveBoardId = boardId || this.defaultBoardId;
     if (effectiveBoardId) {
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
     }
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.put(`/cards/${cardId}`, {
@@ -584,7 +664,7 @@ export class TrelloClient {
   }
 
   async addList(boardId: string | undefined, name: string): Promise<TrelloList> {
-    const effectiveBoardId = this.resolveBoardId(boardId);
+    const effectiveBoardId = await this.resolveBoardIdChecked(boardId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.post('/lists', {
         name,
@@ -628,7 +708,7 @@ export class TrelloClient {
   ): Promise<TrelloList> {
     await this.validateListAccess(listId);
     if (params.idBoard) {
-      this.validateBoardAccess(params.idBoard);
+      await this.validateBoardScopedAccess(params.idBoard);
     }
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.put(`/lists/${listId}`, params);
@@ -637,16 +717,33 @@ export class TrelloClient {
   }
 
   async getMyCards(): Promise<TrelloCard[]> {
-    return this.handleRequest(async () => {
-      const response = this.hasBoardRestriction
+    const restricted = this.hasBoardRestriction || this.hasWorkspaceRestriction;
+    let cards: TrelloCard[] = await this.handleRequest(async () => {
+      const response = restricted
         ? await this.axiosInstance.get('/members/me/cards', { params: { fields: 'all' } })
         : await this.axiosInstance.get('/members/me/cards');
-      const cards: TrelloCard[] = response.data;
-      if (this.hasBoardRestriction) {
-        return cards.filter(card => card.idBoard && this.isBoardAllowed(card.idBoard));
-      }
-      return cards;
+      return response.data;
     });
+    if (this.hasBoardRestriction) {
+      cards = cards.filter(card => card.idBoard && this.isBoardAllowed(card.idBoard));
+    }
+    if (this.hasWorkspaceRestriction) {
+      // Resolve each distinct board's workspace (cached) and drop cards whose board
+      // sits in a blocked workspace.
+      const boardIds = [...new Set(cards.map(card => card.idBoard).filter(Boolean))];
+      const workspaceByBoard = new Map(
+        await Promise.all(
+          boardIds.map(
+            async id => [id, await this.getWorkspaceIdForBoard(id)] as [string, string]
+          )
+        )
+      );
+      cards = cards.filter(card => {
+        const workspaceId = card.idBoard ? workspaceByBoard.get(card.idBoard) : undefined;
+        return !workspaceId || this.isWorkspaceAllowed(workspaceId);
+      });
+    }
+    return cards;
   }
 
   async attachImageToCard(
@@ -806,7 +903,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const response = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`
@@ -849,7 +946,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const checklistsResponse = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`
@@ -896,7 +993,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const response = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`
@@ -947,7 +1044,7 @@ export class TrelloClient {
       if (!effectiveBoardId) {
         throw new McpError(ErrorCode.InvalidParams, 'No board ID or card ID provided and no active board set');
       }
-      this.validateBoardAccess(effectiveBoardId);
+      await this.validateBoardScopedAccess(effectiveBoardId);
 
       const response = await this.axiosInstance.get<TrelloChecklist[]>(
         `/boards/${effectiveBoardId}/checklists`
@@ -1203,7 +1300,7 @@ export class TrelloClient {
 
   // Member management methods
   async getBoardMembers(boardId?: string): Promise<TrelloMember[]> {
-    const effectiveBoardId = this.resolveBoardId(boardId);
+    const effectiveBoardId = await this.resolveBoardIdChecked(boardId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get(`/boards/${effectiveBoardId}/members`);
       return response.data;
@@ -1236,7 +1333,7 @@ export class TrelloClient {
 
   // Label management methods
   async getBoardLabels(boardId?: string): Promise<TrelloLabelDetails[]> {
-    const effectiveBoardId = this.resolveBoardId(boardId);
+    const effectiveBoardId = await this.resolveBoardIdChecked(boardId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get(`/boards/${effectiveBoardId}/labels`);
       return response.data;
@@ -1248,7 +1345,7 @@ export class TrelloClient {
     name: string,
     color?: string
   ): Promise<TrelloLabelDetails> {
-    const effectiveBoardId = this.resolveBoardId(boardId);
+    const effectiveBoardId = await this.resolveBoardIdChecked(boardId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.post(`/boards/${effectiveBoardId}/labels`, {
         name,
@@ -1318,6 +1415,9 @@ export class TrelloClient {
     pos?: string;
   }): Promise<TrelloChecklist> {
     await this.validateCardAccess(params.cardId);
+    // The source must pass the same blocklists as the destination: otherwise checklist
+    // contents could be exfiltrated from a blocked board into an allowed card.
+    await this.validateChecklistAccess(params.sourceChecklistId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.post('/checklists', {
         idCard: params.cardId,
@@ -1379,7 +1479,7 @@ export class TrelloClient {
 
   // Custom field management methods
   async getBoardCustomFields(boardId?: string): Promise<TrelloCustomFieldDefinition[]> {
-    const effectiveBoardId = this.resolveBoardId(boardId);
+    const effectiveBoardId = await this.resolveBoardIdChecked(boardId);
     return this.handleRequest(async () => {
       const response = await this.axiosInstance.get(`/boards/${effectiveBoardId}/customFields`);
       return response.data;

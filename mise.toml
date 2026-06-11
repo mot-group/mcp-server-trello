@@ -22,13 +22,8 @@ task = "link-agentfiles"
 description = "Symlink all agent files to AGENTS.md"
 run = "{{config_root}}/.mise/scripts/link-agentfiles.sh"
 
-[tasks.package]
-description = "Refresh skill assets for packaging"
-run = "{{config_root}}/scripts/build-skill-assets.sh"
-
+# The skill no longer bundles a copy of the server source (skill/scripts/install.sh
+# builds from the repository root), so there is no asset-refresh packaging step.
 [tasks.ci]
-description = "Run tests and refresh the skill source bundle"
-run = [
-  "npm run test",
-  "{{config_root}}/scripts/build-skill-assets.sh",
-]
+description = "Run tests"
+run = "npm run test"
